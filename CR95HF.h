@@ -50,6 +50,8 @@ SOFTWARE.
 #define CR95HF_SEL_CASCADE_LVL_2 0x95
 #define CR95HF_SEL_CASCADE_LVL_3 0x97
 
+#define CR95RF_SAK_FLAG_UID_NOT_COMPLETE 0x04
+
 
 #define CR95HF_ERROR_OK       0x00
 #define CR95HF_ERROR_RESPONSE 0x80
@@ -84,7 +86,7 @@ class CR95HF {
     bool poll();
     bool calibration();
 
-    uint8_t UID[7];
+    uint8_t UID[10];
 
   private:
 
@@ -122,6 +124,8 @@ class CR95HF {
     uint8_t _rx_buf_size = 0;
     uint8_t _data_len = 0;
     uint8_t _ic_rev = CR95HF_IC_REV_QJE;
+    uint8_t _sak = 0;
+    uint8_t _uid_offset = 0;
 };
 
 #endif  // CR95HF_H

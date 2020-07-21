@@ -284,11 +284,11 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
             new_bit_collision_index = _rx_buf[_rx_buf[1] + 1];
         }
 
-        /* we can check that non-alignement is the one expected */
+        // we can check that non-alignement is the one expected
         remaining_bit = 8 - (0x0F & (_rx_buf[2 + (_rx_buf[1] - 2) - 1]));
 
         if (remaining_bit == bit_collision_index + 1) {
-            /* recreate the good UID*/
+            // recreate the good UID
             if (byte_collision_index == 0) {
                 tag[0] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[2 + 2]) | _rx_buf[2] ;
                 tag[1] = _rx_buf[3];
@@ -339,21 +339,28 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
         }
     }
 
-    if (tag_copy_len == 4) {
-        memcpy(UID, _rx_buf + CR95HF_HEADER_LEN, 4);
+    switch (tag_copy_len) {
+        case 4: // SINGLE_SIZE
+        case 7: // DOUBLE_SIZE
+        case 10: // TRIPLE_SIZE
+            memcpy(UID + _uid_offset, _rx_buf + CR95HF_HEADER_LEN, 4);
+            _uid_offset += 4;
+            break;
 
-    } else {
-        memcpy(UID, _rx_buf + CR95HF_HEADER_LEN + 1, 3);
+        default: // UID_PART
+            memcpy(UID + _uid_offset, _rx_buf + CR95HF_HEADER_LEN + 1, 3);
+            _uid_offset += 3;
+            break;
     }
 
-    tr_debug("UID part[%u]: %s", tag_copy_len, tr_array(UID, tag_copy_len));
+    tr_debug("UID[%u]: %s", tag_copy_len, tr_array(UID, _uid_offset));
 
     return true;
 }
 
 bool CR95HF::select(uint8_t level, uint8_t tag_copy_len) {
     tr_debug("SELECT");
-    uint8_t bcc_byte = _rx_buf[2 + 4];
+    uint8_t bcc_byte = _rx_buf[2 + 4]; // Block check character
 
     _tx_buf[0] = SEND_RECV;
     _tx_buf[2] = level;
@@ -376,7 +383,8 @@ bool CR95HF::select(uint8_t level, uint8_t tag_copy_len) {
         return false;
     }
 
-    tr_debug("SAK: %u", _rx_buf[2]);
+    _sak = _rx_buf[2];
+    tr_debug("SAK: %u", _sak);
 
     return true;
 }
@@ -384,6 +392,8 @@ bool CR95HF::select(uint8_t level, uint8_t tag_copy_len) {
 bool CR95HF::poll() {
     switch (_protocol) {
         case ISO14443A: {
+            _uid_offset = 0;
+
             // REQA
             _tx_buf[0] = SEND_RECV;
             _tx_buf[1] = 2; // payload_len
@@ -405,6 +415,33 @@ bool CR95HF::poll() {
 
             if (!select(CR95HF_SEL_CASCADE_LVL_1, tag_copy_len)) {
                 return false;
+            }
+
+            if (_sak & CR95RF_SAK_FLAG_UID_NOT_COMPLETE) {
+                if (!anticol(CR95HF_SEL_CASCADE_LVL_2, tag_copy_len)) {
+                    return false;
+                }
+
+                if (!select(CR95HF_SEL_CASCADE_LVL_2, tag_copy_len)) {
+                    return false;
+                }
+            }
+
+            if (_sak & CR95RF_SAK_FLAG_UID_NOT_COMPLETE) {
+                if (!anticol(CR95HF_SEL_CASCADE_LVL_3, tag_copy_len)) {
+                    return false;
+                }
+
+                if (!select(CR95HF_SEL_CASCADE_LVL_3, tag_copy_len)) {
+                    return false;
+                }
+            }
+
+            if ((_sak & 0x60) == 0x00) {
+                tr_info("TAG is MIFARE");
+
+            } else if ((_sak & 0x20) == 0x20) {
+                tr_info("TAG is ISO14443-4");
             }
         }
         break;
