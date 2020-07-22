@@ -1,0 +1,9 @@
+{
+  "name": "CR95HF",
+  "config": {
+    "timeout": {
+      "help": "Timeout for response (ms)",
+      "value": 50
+    }
+  }
+}

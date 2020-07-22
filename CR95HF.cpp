@@ -23,8 +23,8 @@ SOFTWARE.
 */
 #include <CR95HF.h>
 
-CR95HF::CR95HF(PinName tx, PinName rx) :
-    _serial(tx, rx, 57600) {
+CR95HF::CR95HF(PinName tx, PinName rx, int baud):
+    _serial(tx, rx, baud) {
     _serial.attach(
         callback(this, &CR95HF::rxCb),
         SerialBase::RxIrq
@@ -33,36 +33,32 @@ CR95HF::CR95HF(PinName tx, PinName rx) :
 
 CR95HF::~CR95HF() {};
 
-bool CR95HF::init() {
-    tr_info("CR95HF init");
+cr95hf_error_t CR95HF::init() {
+    tr_info("Init");
+    cr95hf_error_t res = CR95HF_ERROR_OK;
     _tx_buf[0] = IDN;
     _tx_buf[1] = 0;
 
-    if (!send()) {
-        return false;
-    }
+    res = send();
 
-    if (_rx_buf[0] != CR95HF_ERROR_OK) {
+    if (res != CR95HF_ERROR_OK) {
         tr_error("Invalid response");
-        return false;
+        return res;
     }
 
+    // IDN device type check
     if (_rx_buf[CR95HF_HEADER_LEN] != 'N' ||
             _rx_buf[CR95HF_HEADER_LEN + 1] != 'F' ||
             _rx_buf[CR95HF_HEADER_LEN + 2] != 'C') {
-        tr_error("Invalid packet");
-        return false;
+        tr_error("Invalid device type");
+        return CR95HF_ERROR_UNSUPPORTED;
     }
 
-    _ic_rev = _rx_buf[CR95HF_ROM_CODE_REVISION_OFFSET];
-
-    tr_debug("IC rev: %02X", _ic_rev);
-
-    return true;
+    return res;
 }
 
-bool CR95HF::setProtocol(Protocol protocol) {
-    bool state = false;
+cr95hf_error_t CR95HF::setProtocol(protocol_t protocol) {
+    cr95hf_error_t res = CR95HF_ERROR_OK;
     _protocol = protocol;
 
     _tx_buf[0] = PROTOCOL_SELECT;
@@ -75,30 +71,26 @@ bool CR95HF::setProtocol(Protocol protocol) {
             _tx_buf[3] = 0x00;
             _tx_buf[1] += 1; // payload_len
 
-            send();
+            res = send();
 
-            state = true;
+            if (res != CR95HF_ERROR_OK) {
+                tr_error("Invalid response");
+                return res;
+            }
+
             break;
 
         case ISO14443A:
-            tr_info("Protocol set to ISO14443A");
-            // select protocol, datasheet - page 22
+            tr_info("Setting protocol to ISO14443A");
+            // select protocol, datasheet table 12
             _tx_buf[3] = 0x00;
-            _tx_buf[4] = 0x00;
-            _tx_buf[5] = 0x00;
-            _tx_buf[6] = 0x00;
-            _tx_buf[1] += 4; // payload_len
+            _tx_buf[1] += 1; // payload_len
 
-            if (_ic_rev >= CR95HF_IC_REV_QJE) {
-                _tx_buf[7] = 0x02;
-                _tx_buf[8] = 0x02;
+            res = send();
 
-                _tx_buf[1] += 2; // payload_len
-            }
-
-            if (!send() || _rx_buf[0] != CR95HF_ERROR_OK) {
+            if (res != CR95HF_ERROR_OK) {
                 tr_error("Invalid response");
-                return false;
+                return res;
             }
 
             // set synchronization level
@@ -109,9 +101,11 @@ bool CR95HF::setProtocol(Protocol protocol) {
             _tx_buf[4] = 0x58; // TimerW - value between 0x50-0x60
             _tx_buf[5] = CR95HF_TIMERW_CONFIRMATION;
 
-            if (!send() || _rx_buf[0] != CR95HF_ERROR_OK) {
+            res = send();
+
+            if (res != CR95HF_ERROR_OK) {
                 tr_error("Invalid response");
-                return false;
+                return res;
             }
 
             // modulation and gain
@@ -122,23 +116,29 @@ bool CR95HF::setProtocol(Protocol protocol) {
             _tx_buf[4] = 0x01;
             _tx_buf[5] = 0xD7; // modulation & gain - value 0xD0, 0xD1, 0xD3, 0xD7 or 0xDF
 
-            if (!send() || _rx_buf[0] != CR95HF_ERROR_OK) {
+            res = send();
+
+            if (res != CR95HF_ERROR_OK) {
                 tr_error("Invalid response");
-                return false;
+                return res;
             }
 
-            state = true;
             break;
 
         default:
+            tr_info("Unsupported protocol");
+            res = CR95HF_ERROR_UNSUPPORTED;
             break;
     }
 
-    return state;
+    return res;
 }
 
 // TODO
-bool CR95HF::calibration() {
+cr95hf_error_t CR95HF::calibration() {
+    tr_info("Performing calibration");
+    cr95hf_error_t res = CR95HF_ERROR_OK;
+
     _tx_buf[0]  = IDLE; // cmd
     _tx_buf[1]  = 0x0E; // payload_len
     _tx_buf[2]  = 0x03; // WU control
@@ -156,55 +156,190 @@ bool CR95HF::calibration() {
     _tx_buf[14] = 0x3F; // Swing count
     _tx_buf[15] = 0x01; // Max sleep
 
-    send();
+    res = send();
+
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
 
     _tx_buf[12] = 0x00; // DAC data
     _tx_buf[13] = 0xFC;
 
-    send();
+    res = send();
+
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
 
     _tx_buf[12] = 0x00; // DAC data
     _tx_buf[13] = 0x7C;
 
-    send();
+    res = send();
+
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
 
     _tx_buf[12] = 0x00; // DAC data
     _tx_buf[13] = 0x3C;
 
-    send();
+    res = send();
+
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
 
     _tx_buf[12] = 0x00; // DAC data
     _tx_buf[13] = 0x5C;
 
-    send();
+    res = send();
+
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
 
     _tx_buf[12] = 0x00; // DAC data
     _tx_buf[13] = 0x6C;
 
-    send();
+    res = send();
+
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
 
     _tx_buf[12] = 0x00; // DAC data
     _tx_buf[13] = 0x74;
 
-    send();
+    res = send();
+
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
 
     _tx_buf[12] = 0x00; // DAC data
     _tx_buf[13] = 0x70;
 
-    send();
+    res = send();
 
-    return true;
+    if (res != CR95HF_ERROR_OK) {
+        tr_error("Invalid response");
+        return res;
+    }
+
+    return res;
 }
 
-bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
-    tr_debug("ANTICOL");
+bool CR95HF::isTagInRange() {
+    tr_debug("Searching to tag");
+
+    switch (_protocol) {
+        case ISO14443A: {
+
+            // REQA
+            _tx_buf[0] = SEND_RECV;
+            _tx_buf[1] = 2; // payload_len
+            _tx_buf[2] = 0x26;
+            _tx_buf[3] = 0x07;
+
+            if (send() != CR95HF_ERROR_FRAME_RECV_OK) {
+                return false;
+            }
+
+            // _rx_buf holds ATQA
+            if (_rx_buf[CR95HF_HEADER_LEN] & 0b00100000) { // RFU
+                tr_error("RFU must be zero");
+                return false;
+            }
+
+            _uid_offset = 0; // reset offset
+            _uid_len = _rx_buf[CR95HF_HEADER_LEN] >> 6;
+
+            if (_uid_len == 0b00) {
+                _uid_len = MIFARE_UID_SINGLE_SIZE;
+
+            } else if (_uid_len == 0b01) {
+                _uid_len = MIFARE_UID_DOUBLE_SIZE;
+
+            } else if (_uid_len == 0b10) {
+                _uid_len = MIFARE_UID_TRIPLE_SIZE;
+
+            } else {
+                tr_error("Invalid UID len");
+                _uid_len = 0;
+                return false;
+            }
+
+            tr_info("TAG in range, len: %u", _uid_len);
+            return true;
+        }
+
+        default:
+            break;
+
+    }
+
+    return false;
+}
+
+uint8_t CR95HF::getTagUID(uint8_t *uid, uint8_t *tag_type) {
+    tr_info("Getting tag UID");
+
+    switch (_protocol) {
+        case ISO14443A: {
+            uint8_t sak = MIFARE_SAK_UID_NOT_COMPLETE;
+
+            // Anticollision loop
+            for (auto i = 0; i < 3; i++) {
+                if (sak == MIFARE_SAK_UID_NOT_COMPLETE) {
+                    if (!anticol(_cl_level[i])) {
+                        return 0;
+                    }
+
+                    sak = select(_cl_level[i]);
+
+                    if (sak == 0xFF) {
+                        return 0;
+                    }
+                }
+            }
+
+            if (uid) {
+                memcpy(uid, _uid, _uid_offset);
+            }
+
+            if (tag_type) {
+                *tag_type = sak;
+            }
+
+            tr_info("Tag UID: %s", tr_array(_uid, _uid_offset));
+            return _uid_offset;
+        }
+        break;
+
+        default:
+            break;
+    }
+
+    return 0;
+}
+
+bool CR95HF::anticol(uint8_t level) {
+    tr_debug("Anticol request");
     _tx_buf[0] = SEND_RECV;
     _tx_buf[1] = 3; // payload_len
     _tx_buf[2] = level;
     _tx_buf[3] = 0x20;
     _tx_buf[4] = 0x08;
 
-    if (!send() || _rx_buf[0] != CR95HF_ERROR_RESPONSE) {
+    if (send() != CR95HF_ERROR_FRAME_RECV_OK) {
+        tr_error("Invalid response");
         return false;
     }
 
@@ -214,7 +349,6 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
     uint8_t bit_collision_index = _rx_buf[_rx_buf[1] + 1];
     uint8_t new_byte_collision_index = 0;
     uint8_t new_bit_collision_index = 0;
-    uint8_t remaining_bit = 0;
     uint8_t tag[4] = {0};
 
     tr_debug("Collision: %u", collision);
@@ -226,43 +360,43 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
 
     while (collision == 0x80) {
         collision = 0x00;
-        _tx_buf[2 + 1] = 0x20 + ((byte_collision_index) << 4) + (bit_collision_index + 1);
+        _tx_buf[CR95HF_HEADER_LEN + 1] = 0x20 + ((byte_collision_index) << 4) + (bit_collision_index + 1);
 
         if (byte_collision_index == 0) {
-            _tx_buf[2 + 2] = _rx_buf[2] &
-                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
-            _tx_buf[2 + 3] = (bit_collision_index + 1) | 0x40; // add split frame bit
-            tag[0] = _tx_buf[2 + 2];
+            _tx_buf[CR95HF_HEADER_LEN + 2] = _rx_buf[2] &
+                                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
+            _tx_buf[CR95HF_HEADER_LEN + 3] = (bit_collision_index + 1) | 0x40; // add split frame bit
+            tag[0] = _tx_buf[CR95HF_HEADER_LEN + 2];
 
         } else if (byte_collision_index == 1) {
-            _tx_buf[2 + 2] = _rx_buf[2];
-            _tx_buf[2 + 3] = _rx_buf[3] &
-                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
-            _tx_buf[2 + 4] = (bit_collision_index + 1) | 0x40; // add split frame bit
-            tag[0] = _tx_buf[2 + 2];
-            tag[1] = _tx_buf[2 + 3];
+            _tx_buf[CR95HF_HEADER_LEN + 2] = _rx_buf[2];
+            _tx_buf[CR95HF_HEADER_LEN + 3] = _rx_buf[3] &
+                                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
+            _tx_buf[CR95HF_HEADER_LEN + 4] = (bit_collision_index + 1) | 0x40; // add split frame bit
+            tag[0] = _tx_buf[CR95HF_HEADER_LEN + 2];
+            tag[1] = _tx_buf[CR95HF_HEADER_LEN + 3];
 
         } else if (byte_collision_index == 2) {
-            _tx_buf[2 + 2] = _rx_buf[2];
-            _tx_buf[2 + 3] = _rx_buf[3];
-            _tx_buf[2 + 4] = _rx_buf[4] &
-                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
-            _tx_buf[2 + 5] = (bit_collision_index + 1) | 0x40; // add split frame bit
-            tag[0] = _tx_buf[2 + 2];
-            tag[1] = _tx_buf[2 + 3];
-            tag[2] = _tx_buf[2 + 4];
+            _tx_buf[CR95HF_HEADER_LEN + 2] = _rx_buf[2];
+            _tx_buf[CR95HF_HEADER_LEN + 3] = _rx_buf[3];
+            _tx_buf[CR95HF_HEADER_LEN + 4] = _rx_buf[4] &
+                                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
+            _tx_buf[CR95HF_HEADER_LEN + 5] = (bit_collision_index + 1) | 0x40; // add split frame bit
+            tag[0] = _tx_buf[CR95HF_HEADER_LEN + 2];
+            tag[1] = _tx_buf[CR95HF_HEADER_LEN + 3];
+            tag[2] = _tx_buf[CR95HF_HEADER_LEN + 4];
 
         } else if (byte_collision_index == 3) {
-            _tx_buf[2 + 2] = _rx_buf[2];
-            _tx_buf[2 + 3] = _rx_buf[3];
-            _tx_buf[2 + 4] = _rx_buf[4];
-            _tx_buf[2 + 5] = _rx_buf[5] &
-                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
-            _tx_buf[2 + 6] = (bit_collision_index + 1) | 0x40; // add split frame bit
-            tag[0] = _tx_buf[2 + 2];
-            tag[1] = _tx_buf[2 + 3];
-            tag[2] = _tx_buf[2 + 4];
-            tag[3] = _tx_buf[2 + 5];
+            _tx_buf[CR95HF_HEADER_LEN + 2] = _rx_buf[2];
+            _tx_buf[CR95HF_HEADER_LEN + 3] = _rx_buf[3];
+            _tx_buf[CR95HF_HEADER_LEN + 4] = _rx_buf[4];
+            _tx_buf[CR95HF_HEADER_LEN + 5] = _rx_buf[5] &
+                                             ((uint8_t)(~(0xFF << (bit_collision_index + 1)))); // ISO said it's better to put collision bit to value 1
+            _tx_buf[CR95HF_HEADER_LEN + 6] = (bit_collision_index + 1) | 0x40; // add split frame bit
+            tag[0] = _tx_buf[CR95HF_HEADER_LEN + 2];
+            tag[1] = _tx_buf[CR95HF_HEADER_LEN + 3];
+            tag[2] = _tx_buf[CR95HF_HEADER_LEN + 4];
+            tag[3] = _tx_buf[CR95HF_HEADER_LEN + 5];
 
         } else {
             tr_error("Invalid byte collision");
@@ -271,7 +405,7 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
 
         _tx_buf[1] = 3 + byte_collision_index + 1; // payload_len
 
-        if (!send() || _rx_buf[0] != CR95HF_ERROR_RESPONSE) {
+        if (send() != CR95HF_ERROR_FRAME_RECV_OK) {
             tr_error("Invalid response");
             return false;
         }
@@ -285,27 +419,27 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
         }
 
         // we can check that non-alignement is the one expected
-        remaining_bit = 8 - (0x0F & (_rx_buf[2 + (_rx_buf[1] - 2) - 1]));
+        uint8_t remaining_bit = 8 - (0x0F & (_rx_buf[CR95HF_HEADER_LEN + (_rx_buf[1] - 2) - 1]));
 
         if (remaining_bit == bit_collision_index + 1) {
             // recreate the good UID
             if (byte_collision_index == 0) {
-                tag[0] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[2 + 2]) | _rx_buf[2] ;
+                tag[0] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[CR95HF_HEADER_LEN + 2]) | _rx_buf[2] ;
                 tag[1] = _rx_buf[3];
                 tag[2] = _rx_buf[4];
                 tag[3] = _rx_buf[5];
 
             } else if (byte_collision_index == 1) {
-                tag[1] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[2 + 3]) | _rx_buf[2] ;
+                tag[1] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[CR95HF_HEADER_LEN + 3]) | _rx_buf[2] ;
                 tag[2] = _rx_buf[3];
                 tag[3] = _rx_buf[4];
 
             } else if (byte_collision_index == 2) {
-                tag[2] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[2 + 4]) | _rx_buf[2] ;
+                tag[2] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[CR95HF_HEADER_LEN + 4]) | _rx_buf[2] ;
                 tag[3] = _rx_buf[3];
 
             } else if (byte_collision_index == 3) {
-                tag[3] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[2 + 5]) | _rx_buf[2] ;
+                tag[3] = ((~(0xFF << (bit_collision_index + 1))) & _tx_buf[CR95HF_HEADER_LEN + 5]) | _rx_buf[2] ;
 
             } else {
                 tr_error("Invalid byte collision");
@@ -317,7 +451,7 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
             return false;
         }
 
-        /* prepare the buffer expected by the caller */
+        // prepare the buffer expected by the caller
         _rx_buf[0] = 0x80;
         _rx_buf[1] = len_origin;
         _rx_buf[2] = tag[0];
@@ -339,121 +473,45 @@ bool CR95HF::anticol(uint8_t level, uint8_t tag_copy_len) {
         }
     }
 
-    switch (tag_copy_len) {
-        case 4: // SINGLE_SIZE
-        case 7: // DOUBLE_SIZE
-        case 10: // TRIPLE_SIZE
-            memcpy(UID + _uid_offset, _rx_buf + CR95HF_HEADER_LEN, 4);
-            _uid_offset += 4;
-            break;
+    if ((_uid_len == MIFARE_UID_SINGLE_SIZE && level == MIFARE_CL_1) ||
+            (_uid_len == MIFARE_UID_DOUBLE_SIZE && level == MIFARE_CL_2) ||
+            (_uid_len == MIFARE_UID_TRIPLE_SIZE && level == MIFARE_CL_3)) {
+        memcpy(_uid + _uid_offset, _rx_buf + CR95HF_HEADER_LEN, 4);
+        _uid_offset += 4;
 
-        default: // UID_PART
-            memcpy(UID + _uid_offset, _rx_buf + CR95HF_HEADER_LEN + 1, 3);
-            _uid_offset += 3;
-            break;
+    } else { // UID_PART
+        memcpy(_uid + _uid_offset, _rx_buf + CR95HF_HEADER_LEN + 1, 3);
+        _uid_offset += 3;
     }
 
-    tr_debug("UID[%u]: %s", tag_copy_len, tr_array(UID, _uid_offset));
+    tr_debug("UID[%u] so far: %s", _uid_offset, tr_array(_uid, _uid_offset));
 
     return true;
 }
 
-bool CR95HF::select(uint8_t level, uint8_t tag_copy_len) {
-    tr_debug("SELECT");
-    uint8_t bcc_byte = _rx_buf[2 + 4]; // Block check character
-
+uint8_t CR95HF::select(uint8_t level) {
+    tr_debug("Select request");
     _tx_buf[0] = SEND_RECV;
+    _tx_buf[1] = 8; // payload_len
     _tx_buf[2] = level;
     _tx_buf[3] = 0x70;
 
-    if (tag_copy_len == 4) {
-        memcpy(_tx_buf + 4, UID, 4);
+    memcpy(_tx_buf + 4, _rx_buf + 2, 4); // copy UID or CT+UID
 
-    } else {
-        _tx_buf[4] = 0x88;
-        memcpy(_tx_buf + 5, UID, 3);
-    }
-
-    _tx_buf[8] = bcc_byte;
+    _tx_buf[8] = _rx_buf[_rx_buf[1] - 2]; // copy BCC
     _tx_buf[9] = 0x20 | 0x8; // append CRC + 8 bits in first byte
 
-    _tx_buf[1] = 8; // payload_len
-
-    if (!send() || _rx_buf[0] != CR95HF_ERROR_RESPONSE) {
-        return false;
+    if (send() != CR95HF_ERROR_FRAME_RECV_OK) {
+        tr_error("Invalid response");
+        return 0xFF;
     }
 
-    _sak = _rx_buf[2];
-    tr_debug("SAK: %u", _sak);
+    tr_debug("sak: %u", _rx_buf[2]);
 
-    return true;
+    return _rx_buf[2];
 }
 
-bool CR95HF::poll() {
-    switch (_protocol) {
-        case ISO14443A: {
-            _uid_offset = 0;
-
-            // REQA
-            _tx_buf[0] = SEND_RECV;
-            _tx_buf[1] = 2; // payload_len
-            _tx_buf[2] = 0x26;
-            _tx_buf[3] = 0x07;
-
-            // catch timeout or other errors
-            if (!send() || _rx_buf[0] != CR95HF_ERROR_RESPONSE) {
-                return false;
-            }
-
-            uint8_t tag_copy_len = _rx_buf[CR95HF_HEADER_LEN];
-
-            tr_info("TAG in range");
-
-            if (!anticol(CR95HF_SEL_CASCADE_LVL_1, tag_copy_len)) {
-                return false;
-            }
-
-            if (!select(CR95HF_SEL_CASCADE_LVL_1, tag_copy_len)) {
-                return false;
-            }
-
-            if (_sak & CR95RF_SAK_FLAG_UID_NOT_COMPLETE) {
-                if (!anticol(CR95HF_SEL_CASCADE_LVL_2, tag_copy_len)) {
-                    return false;
-                }
-
-                if (!select(CR95HF_SEL_CASCADE_LVL_2, tag_copy_len)) {
-                    return false;
-                }
-            }
-
-            if (_sak & CR95RF_SAK_FLAG_UID_NOT_COMPLETE) {
-                if (!anticol(CR95HF_SEL_CASCADE_LVL_3, tag_copy_len)) {
-                    return false;
-                }
-
-                if (!select(CR95HF_SEL_CASCADE_LVL_3, tag_copy_len)) {
-                    return false;
-                }
-            }
-
-            if ((_sak & 0x60) == 0x00) {
-                tr_info("TAG is MIFARE");
-
-            } else if ((_sak & 0x20) == 0x20) {
-                tr_info("TAG is ISO14443-4");
-            }
-        }
-        break;
-
-        default:
-            break;
-    }
-
-    return true;
-}
-
-bool CR95HF::send(bool wait) {
+cr95hf_error_t CR95HF::send() {
     uint8_t len = _tx_buf[1] + CR95HF_HEADER_LEN;
     tr_debug("Sending[%u]: %s", len, tr_array(static_cast<const uint8_t *>(_tx_buf), len));
 
@@ -463,21 +521,19 @@ bool CR95HF::send(bool wait) {
 
     _serial.write(_tx_buf, len);
 
-    if (wait) {
-        uint32_t wait = _flags.wait_all(CR95HF_FLAGS_RX_DONE, TIMEOUT);
+    uint32_t wait = _flags.wait_all(CR95HF_FLAGS_RX_DONE, MBED_CONF_CR95HF_TIMEOUT);
 
-        if (wait != CR95HF_FLAGS_RX_DONE) {
-            tr_error("RX timeout");
-            return false;
-        }
-
-        tr_debug("Response[%u]: %s", _rx_buf_size, tr_array(_rx_buf, _rx_buf_size));
+    if (wait != CR95HF_FLAGS_RX_DONE) {
+        tr_error("RX timeout");
+        return CR95HF_ERROR_TIMEOUT;
     }
 
-    return true;
+    tr_debug("Response[%u]: %s", _rx_buf_size, tr_array(_rx_buf, _rx_buf_size));
+
+    return _rx_buf[0];
 }
 
-void CR95HF::rxCb() { // ISR
+void CR95HF::rxCb() {
     uint8_t character;
 
     while (_serial.readable()) {
@@ -487,7 +543,17 @@ void CR95HF::rxCb() { // ISR
             _rx_buf[_rx_buf_size] = character;
             _rx_buf_size++;
 
-            process();
+            if (_rx_buf_size == 2) { // got length byte
+                if (_rx_buf[1] == 0) { // zero len
+                    _flags.set(CR95HF_FLAGS_RX_DONE);
+
+                } else {
+                    _data_len = _rx_buf[1] + CR95HF_HEADER_LEN;
+                }
+
+            } else if (_rx_buf_size > CR95HF_HEADER_LEN && _rx_buf_size == _data_len) {
+                _flags.set(CR95HF_FLAGS_RX_DONE);
+            }
 
             // prevent overflow
             if (_rx_buf_size >= sizeof(_rx_buf)) {
@@ -495,29 +561,4 @@ void CR95HF::rxCb() { // ISR
             }
         }
     }
-}
-
-void CR95HF::process() { // ISR
-    if (_rx_buf_size == 2) { // got length
-        if (_rx_buf[1] == 0) {
-            _flags.set(CR95HF_FLAGS_RX_DONE);
-
-        } else {
-            _data_len = _rx_buf[1] + CR95HF_HEADER_LEN;
-        }
-
-    } else if (_rx_buf_size > 2 && _rx_buf_size == _data_len) {
-        _flags.set(CR95HF_FLAGS_RX_DONE);
-    }
-}
-
-uint8_t CR95HF::checksum(const void *data, size_t len) {
-    const auto *buffer = static_cast<const char *>(data);
-    uint8_t result = 0;
-
-    for (size_t i = 0 ; i < len ; i++) {
-        result ^= buffer[i];
-    }
-
-    return result;
 }
