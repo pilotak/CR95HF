@@ -1,4 +1,6 @@
 # CR95HF
+[![Framework Badge mbed](https://img.shields.io/badge/framework-mbed-008fbe.svg)](https://os.mbed.com/)
+
 Mbed library for CR95HF (X-Nucleo NFC03A1).
 **Only ISO/IEC 14443A is suported at the moment.**
 
